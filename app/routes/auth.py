@@ -62,3 +62,19 @@ def login():
         ),
         "user": user.to_dict()
     })
+@auth_bp.get("/me")
+@jwt_required()
+def me():
+    user = db.session.get(
+        User,
+        int(get_jwt_identity())
+    )
+
+    if not user:
+        return jsonify({
+            "error": "user not found"
+        }), 404
+
+    return jsonify({
+        "user": user.to_dict()
+    })
