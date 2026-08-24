@@ -120,3 +120,47 @@ def update_me():
         "message": "profile updated",
         "user": user.to_dict()
     }), 200
+@auth_bp.patch("/change-password")
+@jwt_required()
+def change_password():
+    user = db.session.get(
+        User,
+        int(get_jwt_identity())
+    )
+
+    if not user:
+        return jsonify({
+            "error": "user not found"
+        }), 404
+
+    data = request.get_json() or {}
+
+    current_password = data.get("current_password", "")
+    new_password = data.get("new_password", "")
+
+    if not current_password or not new_password:
+        return jsonify({
+            "error": "current password and new password are required"
+        }), 400
+
+    if not user.check_password(current_password):
+        return jsonify({
+            "error": "current password is incorrect"
+        }), 401
+
+    if len(new_password) < 8:
+        return jsonify({
+            "error": "new password must be at least 8 characters"
+        }), 400
+
+    if current_password == new_password:
+        return jsonify({
+            "error": "new password must be different from current password"
+        }), 400
+
+    user.set_password(new_password)
+    db.session.commit()
+
+    return jsonify({
+        "message": "password changed successfully"
+    }), 200
