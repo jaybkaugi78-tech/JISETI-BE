@@ -78,3 +78,45 @@ def me():
     return jsonify({
         "user": user.to_dict()
     })
+@auth_bp.patch("/me")
+@jwt_required()
+def update_me():
+    user = db.session.get(
+        User,
+        int(get_jwt_identity())
+    )
+
+    if not user:
+        return jsonify({
+            "error": "user not found"
+        }), 404
+
+    data = request.get_json() or {}
+
+    username = data.get("username", "").strip()
+    email = data.get("email", "").strip().lower()
+
+    if not username or not email:
+        return jsonify({
+            "error": "username and email are required"
+        }), 400
+
+    existing_email = User.query.filter(
+        User.email == email,
+        User.id != user.id
+    ).first()
+
+    if existing_email:
+        return jsonify({
+            "error": "email already registered"
+        }), 409
+
+    user.username = username
+    user.email = email
+
+    db.session.commit()
+
+    return jsonify({
+        "message": "profile updated",
+        "user": user.to_dict()
+    }), 200
