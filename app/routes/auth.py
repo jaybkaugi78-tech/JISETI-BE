@@ -41,3 +41,24 @@ def register():
         ),
         "user": user.to_dict()
     }), 201
+@auth_bp.post("/login")
+def login():
+    data = request.get_json() or {}
+
+    user = User.query.filter_by(
+        email=(data.get("email") or "").strip().lower()
+    ).first()
+
+    if not user or not user.check_password(
+        data.get("password") or ""
+    ):
+        return jsonify({
+            "error": "invalid email or password"
+        }), 401
+
+    return jsonify({
+        "access_token": create_access_token(
+            identity=str(user.id)
+        ),
+        "user": user.to_dict()
+    })
