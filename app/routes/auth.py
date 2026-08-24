@@ -7,6 +7,11 @@ from flask_jwt_extended import (
 
 from app.extensions import db
 from app.models import User
+
+
+auth_bp = Blueprint("auth", __name__)
+
+
 @auth_bp.post("/register")
 def register():
     data = request.get_json() or {}
@@ -41,6 +46,8 @@ def register():
         ),
         "user": user.to_dict()
     }), 201
+
+
 @auth_bp.post("/login")
 def login():
     data = request.get_json() or {}
@@ -62,6 +69,8 @@ def login():
         ),
         "user": user.to_dict()
     })
+
+
 @auth_bp.get("/me")
 @jwt_required()
 def me():
@@ -78,6 +87,8 @@ def me():
     return jsonify({
         "user": user.to_dict()
     })
+
+
 @auth_bp.patch("/me")
 @jwt_required()
 def update_me():
@@ -120,6 +131,8 @@ def update_me():
         "message": "profile updated",
         "user": user.to_dict()
     }), 200
+
+
 @auth_bp.patch("/change-password")
 @jwt_required()
 def change_password():
