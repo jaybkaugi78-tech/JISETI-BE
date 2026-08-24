@@ -11,8 +11,9 @@ VALID_STATUSES = {
     "REJECTED",
     "RESOLVED",
 }
+
 def get_admin():
     return db.session.get(
         User,
-        int(get_jwt_identity())    
-
+        int(get_jwt_identity())
+    )
