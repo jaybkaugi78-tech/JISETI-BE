@@ -8,7 +8,12 @@ from flask import (
     current_app,
     send_from_directory,
 )
-from flask_jwt_extended import get_jwt_identity, jwt_required
+
+from flask_jwt_extended import (
+    get_jwt_identity,
+    jwt_required,
+)
+
 from werkzeug.utils import secure_filename
 
 from app.extensions import db
@@ -37,10 +42,6 @@ ALLOWED_MEDIA_EXTENSIONS = {
 }
 
 
-# =========================================================
-# HELPERS
-# =========================================================
-
 def allowed_media(filename):
     return (
         "." in filename
@@ -58,7 +59,7 @@ def save_media_files(files):
 
     os.makedirs(
         upload_folder,
-        exist_ok=True
+        exist_ok=True,
     )
 
     saved_files = []
@@ -70,10 +71,14 @@ def save_media_files(files):
         if not allowed_media(file.filename):
             continue
 
-        safe_name = secure_filename(file.filename)
+        safe_name = secure_filename(
+            file.filename
+        )
 
         extension = (
-            safe_name.rsplit(".", 1)[1].lower()
+            safe_name
+            .rsplit(".", 1)[1]
+            .lower()
         )
 
         unique_name = (
@@ -87,14 +92,12 @@ def save_media_files(files):
 
         file.save(file_path)
 
-        saved_files.append(unique_name)
+        saved_files.append(
+            unique_name
+        )
 
     return saved_files
 
-
-# =========================================================
-# GET ALL REPORTS FOR LOGGED-IN USER
-# =========================================================
 
 @reports_bp.get("")
 @jwt_required()
@@ -105,27 +108,22 @@ def list_reports():
 
     reports = (
         Report.query
-        .filter_by(user_id=user_id)
+        .filter_by(
+            user_id=user_id
+        )
         .order_by(
             Report.created_at.desc()
         )
         .all()
     )
 
-    return jsonify(
-        {
-            "reports": [
-                report.to_dict()
-                for report in reports
-            ]
-        }
-    )
+    return jsonify({
+        "reports": [
+            report.to_dict()
+            for report in reports
+        ]
+    }), 200
 
-
-# =========================================================
-# CREATE REPORT
-# Supports both JSON and multipart/form-data
-# =========================================================
 
 @reports_bp.post("")
 @jwt_required()
@@ -135,21 +133,25 @@ def create_report():
         media_files = []
     else:
         data = request.form.to_dict()
-        media_files = request.files.getlist(
-            "media"
+
+        media_files = (
+            request.files.getlist(
+                "media"
+            )
         )
 
     report_type = (
         data.get("type") or ""
-    ).upper().replace("-", "_")
+    ).upper().replace(
+        "-",
+        "_",
+    )
 
     if report_type not in VALID_TYPES:
-        return jsonify(
-            {
-                "error":
-                    "type must be RED_FLAG or INTERVENTION"
-            }
-        ), 400
+        return jsonify({
+            "error":
+                "type must be RED_FLAG or INTERVENTION"
+        }), 400
 
     title = (
         data.get("title") or ""
@@ -160,39 +162,51 @@ def create_report():
     ).strip()
 
     if not title or not description:
-        return jsonify(
-            {
-                "error":
-                    "title and description are required"
-            }
-        ), 400
+        return jsonify({
+            "error":
+                "title and description are required"
+        }), 400
 
-    latitude = data.get("latitude")
-    longitude = data.get("longitude")
+    latitude = data.get(
+        "latitude"
+    )
+
+    longitude = data.get(
+        "longitude"
+    )
 
     try:
         latitude = (
             float(latitude)
-            if latitude not in (None, "")
+            if latitude not in (
+                None,
+                "",
+            )
             else None
         )
 
         longitude = (
             float(longitude)
-            if longitude not in (None, "")
+            if longitude not in (
+                None,
+                "",
+            )
             else None
         )
 
-    except (TypeError, ValueError):
-        return jsonify(
-            {
-                "error":
-                    "latitude and longitude must be valid numbers"
-            }
-        ), 400
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return jsonify({
+            "error":
+                "latitude and longitude must be valid numbers"
+        }), 400
 
-    saved_media = save_media_files(
-        media_files
+    saved_media = (
+        save_media_files(
+            media_files
+        )
     )
 
     report = Report(
@@ -211,24 +225,119 @@ def create_report():
         media=saved_media,
     )
 
-    db.session.add(report)
+    db.session.add(
+        report
+    )
+
     db.session.commit()
 
-    return jsonify(
-        {
-            "message":
-                "report created",
-            "report":
-                report.to_dict(),
-        }
-    ), 201
+    return jsonify({
+        "message":
+            "report created",
+
+        "report":
+            report.to_dict(),
+    }), 201
 
 
-# =========================================================
-# GET USER NOTIFICATIONS
-# =========================================================
+@reports_bp.get("/public")
+def public_reports():
+    reports = (
+        Report.query
+        .filter(
+            Report.status.in_([
+                "UNDER INVESTIGATION",
+                "RESOLVED",
+            ])
+        )
+        .order_by(
+            Report.created_at.desc()
+        )
+        .all()
+    )
 
-@reports_bp.get("/notifications")
+    public_items = []
+
+    for report in reports:
+        data = report.to_dict()
+
+        data.pop(
+            "user_id",
+            None,
+        )
+
+        data.pop(
+            "created_by",
+            None,
+        )
+
+        data.pop(
+            "user",
+            None,
+        )
+
+        public_items.append(
+            data
+        )
+
+    return jsonify({
+        "reports":
+            public_items
+    }), 200
+
+
+@reports_bp.get(
+    "/public/<int:report_id>"
+)
+def public_report_detail(
+    report_id
+):
+    report = db.session.get(
+        Report,
+        report_id,
+    )
+
+    if not report:
+        return jsonify({
+            "error":
+                "report not found"
+        }), 404
+
+    if report.status not in {
+        "UNDER INVESTIGATION",
+        "RESOLVED",
+    }:
+        return jsonify({
+            "error":
+                "report is not publicly available"
+        }), 404
+
+    data = report.to_dict()
+
+    data.pop(
+        "user_id",
+        None,
+    )
+
+    data.pop(
+        "created_by",
+        None,
+    )
+
+    data.pop(
+        "user",
+        None,
+    )
+
+    return jsonify({
+        "report":
+            data
+    }), 200
+
+
+@reports_bp.get(
+    "/notifications"
+)
 @jwt_required()
 def notifications():
     user_id = int(
@@ -238,18 +347,21 @@ def notifications():
     history_items = (
         db.session.query(
             StatusHistory,
-            Report
+            Report,
         )
         .join(
             Report,
             StatusHistory.report_id
-            == Report.id
+            == Report.id,
         )
         .filter(
-            Report.user_id == user_id
+            Report.user_id
+            == user_id
         )
         .order_by(
-            StatusHistory.changed_at.desc()
+            StatusHistory
+            .changed_at
+            .desc()
         )
         .all()
     )
@@ -257,127 +369,37 @@ def notifications():
     notification_items = []
 
     for history, report in history_items:
-        notification_items.append(
-            {
-                "id":
-                    history.id,
+        notification_items.append({
+            "id":
+                history.id,
 
-                "report_id":
-                    report.id,
+            "report_id":
+                report.id,
 
-                "report_title":
-                    report.title,
+            "report_title":
+                report.title,
 
-                "old_status":
-                    history.old_status,
+            "old_status":
+                history.old_status,
 
-                "new_status":
-                    history.new_status,
+            "new_status":
+                history.new_status,
 
-                "changed_at": (
-                    history.changed_at.isoformat()
-                    if history.changed_at
-                    else None
-                ),
+            "changed_at": (
+                history.changed_at.isoformat()
+                if history.changed_at
+                else None
+            ),
 
-                "is_read":
-                    history.is_read,
-            }
-        )
+            "is_read":
+                history.is_read,
+        })
 
-    return jsonify(
-        {
-            "notifications":
-                notification_items
-        }
-    )
+    return jsonify({
+        "notifications":
+            notification_items
+    }), 200
 
-
-# =========================================================
-# MARK ONE NOTIFICATION AS READ
-# =========================================================
-
-@reports_bp.patch(
-    "/notifications/<int:notification_id>/read"
-)
-@jwt_required()
-def mark_notification_read(
-    notification_id
-):
-    user_id = int(
-        get_jwt_identity()
-    )
-
-    history = db.session.get(
-        StatusHistory,
-        notification_id
-    )
-
-    if not history:
-        return jsonify(
-            {
-                "error":
-                    "notification not found"
-            }
-        ), 404
-
-    report = db.session.get(
-        Report,
-        history.report_id
-    )
-
-    if (
-        not report
-        or report.user_id != user_id
-    ):
-        return jsonify(
-            {
-                "error":
-                    "you cannot access this notification"
-            }
-        ), 403
-
-    history.is_read = True
-
-    db.session.commit()
-
-    return jsonify(
-        {
-            "message":
-                "notification marked as read",
-
-            "notification": {
-                "id":
-                    history.id,
-
-                "report_id":
-                    report.id,
-
-                "report_title":
-                    report.title,
-
-                "old_status":
-                    history.old_status,
-
-                "new_status":
-                    history.new_status,
-
-                "changed_at": (
-                    history.changed_at.isoformat()
-                    if history.changed_at
-                    else None
-                ),
-
-                "is_read":
-                    history.is_read,
-            }
-        }
-    )
-
-
-# =========================================================
-# MARK ALL NOTIFICATIONS AS READ
-# =========================================================
 
 @reports_bp.patch(
     "/notifications/read-all"
@@ -395,11 +417,15 @@ def mark_all_notifications_read():
         .join(
             Report,
             StatusHistory.report_id
-            == Report.id
+            == Report.id,
         )
         .filter(
-            Report.user_id == user_id,
-            StatusHistory.is_read.is_(False),
+            Report.user_id
+            == user_id,
+
+            StatusHistory
+            .is_read
+            .is_(False),
         )
         .all()
     )
@@ -409,26 +435,94 @@ def mark_all_notifications_read():
 
     db.session.commit()
 
-    return jsonify(
-        {
-            "message":
-                "all notifications marked as read",
+    return jsonify({
+        "message":
+            "all notifications marked as read",
 
-            "updated":
-                len(histories),
-        }
+        "updated":
+            len(histories),
+    }), 200
+
+
+@reports_bp.patch(
+    "/notifications/<int:notification_id>/read"
+)
+@jwt_required()
+def mark_notification_read(
+    notification_id
+):
+    user_id = int(
+        get_jwt_identity()
     )
 
+    history = db.session.get(
+        StatusHistory,
+        notification_id,
+    )
 
-# =========================================================
-# SERVE REPORT MEDIA
-# Public route for displaying uploaded files
-# =========================================================
+    if not history:
+        return jsonify({
+            "error":
+                "notification not found"
+        }), 404
+
+    report = db.session.get(
+        Report,
+        history.report_id,
+    )
+
+    if (
+        not report
+        or report.user_id
+        != user_id
+    ):
+        return jsonify({
+            "error":
+                "you cannot access this notification"
+        }), 403
+
+    history.is_read = True
+
+    db.session.commit()
+
+    return jsonify({
+        "message":
+            "notification marked as read",
+
+        "notification": {
+            "id":
+                history.id,
+
+            "report_id":
+                report.id,
+
+            "report_title":
+                report.title,
+
+            "old_status":
+                history.old_status,
+
+            "new_status":
+                history.new_status,
+
+            "changed_at": (
+                history.changed_at.isoformat()
+                if history.changed_at
+                else None
+            ),
+
+            "is_read":
+                history.is_read,
+        },
+    }), 200
+
 
 @reports_bp.get(
     "/media/<path:filename>"
 )
-def get_report_media(filename):
+def get_report_media(
+    filename
+):
     upload_folder = os.path.join(
         current_app.root_path,
         "uploads",
@@ -441,37 +535,31 @@ def get_report_media(filename):
     )
 
 
-# =========================================================
-# GET ONE REPORT
-# =========================================================
-
 @reports_bp.get(
     "/<int:report_id>"
 )
 @jwt_required()
-def get_report(report_id):
+def get_report(
+    report_id
+):
     report = db.session.get(
         Report,
-        report_id
+        report_id,
     )
 
     if not report:
-        return jsonify(
-            {
-                "error":
-                    "report not found"
-            }
-        ), 404
+        return jsonify({
+            "error":
+                "report not found"
+        }), 404
 
     if report.user_id != int(
         get_jwt_identity()
     ):
-        return jsonify(
-            {
-                "error":
-                    "you cannot view this report"
-            }
-        ), 403
+        return jsonify({
+            "error":
+                "you cannot view this report"
+        }), 403
 
     data = report.to_dict()
 
@@ -481,26 +569,22 @@ def get_report(report_id):
         in report.status_history
     ]
 
-    return jsonify(
-        {
-            "report":
-                data
-        }
-    )
+    return jsonify({
+        "report":
+            data
+    }), 200
 
-
-# =========================================================
-# UPDATE REPORT
-# =========================================================
 
 @reports_bp.put(
     "/<int:report_id>"
 )
 @jwt_required()
-def update_report(report_id):
+def update_report(
+    report_id
+):
     report = db.session.get(
         Report,
-        report_id
+        report_id,
     )
 
     user_id = int(
@@ -508,28 +592,22 @@ def update_report(report_id):
     )
 
     if not report:
-        return jsonify(
-            {
-                "error":
-                    "report not found"
-            }
-        ), 404
+        return jsonify({
+            "error":
+                "report not found"
+        }), 404
 
     if report.user_id != user_id:
-        return jsonify(
-            {
-                "error":
-                    "you cannot edit this report"
-            }
-        ), 403
+        return jsonify({
+            "error":
+                "you cannot edit this report"
+        }), 403
 
     if report.status != "DRAFT":
-        return jsonify(
-            {
-                "error":
-                    "only DRAFT reports can be edited"
-            }
-        ), 403
+        return jsonify({
+            "error":
+                "only DRAFT reports can be edited"
+        }), 403
 
     data = request.get_json() or {}
 
@@ -546,34 +624,30 @@ def update_report(report_id):
             setattr(
                 report,
                 field,
-                data[field]
+                data[field],
             )
 
     db.session.commit()
 
-    return jsonify(
-        {
-            "message":
-                "report updated",
+    return jsonify({
+        "message":
+            "report updated",
 
-            "report":
-                report.to_dict(),
-        }
-    )
+        "report":
+            report.to_dict(),
+    }), 200
 
-
-# =========================================================
-# DELETE REPORT
-# =========================================================
 
 @reports_bp.delete(
     "/<int:report_id>"
 )
 @jwt_required()
-def delete_report(report_id):
+def delete_report(
+    report_id
+):
     report = db.session.get(
         Report,
-        report_id
+        report_id,
     )
 
     user_id = int(
@@ -581,30 +655,23 @@ def delete_report(report_id):
     )
 
     if not report:
-        return jsonify(
-            {
-                "error":
-                    "report not found"
-            }
-        ), 404
+        return jsonify({
+            "error":
+                "report not found"
+        }), 404
 
     if report.user_id != user_id:
-        return jsonify(
-            {
-                "error":
-                    "only the creator can delete this report"
-            }
-        ), 403
+        return jsonify({
+            "error":
+                "only the creator can delete this report"
+        }), 403
 
     if report.status != "DRAFT":
-        return jsonify(
-            {
-                "error":
-                    "only DRAFT reports can be deleted"
-            }
-        ), 403
+        return jsonify({
+            "error":
+                "only DRAFT reports can be deleted"
+        }), 403
 
-    # Delete uploaded media files too
     upload_folder = os.path.join(
         current_app.root_path,
         "uploads",
@@ -619,18 +686,23 @@ def delete_report(report_id):
             filename,
         )
 
-        if os.path.exists(file_path):
+        if os.path.exists(
+            file_path
+        ):
             try:
-                os.remove(file_path)
+                os.remove(
+                    file_path
+                )
             except OSError:
                 pass
 
-    db.session.delete(report)
+    db.session.delete(
+        report
+    )
+
     db.session.commit()
 
-    return jsonify(
-        {
-            "message":
-                "report deleted"
-        }
-    )
+    return jsonify({
+        "message":
+            "report deleted"
+    }), 200
