@@ -16,13 +16,15 @@ from flask_jwt_extended import (
 
 from werkzeug.utils import secure_filename
 
+from PIL import Image, ImageOps, UnidentifiedImageError
+
 from app.extensions import db
 from app.models import Report, StatusHistory
 
 
 reports_bp = Blueprint(
     "reports",
-    __name__
+    __name__,
 )
 
 VALID_TYPES = {
@@ -30,27 +32,113 @@ VALID_TYPES = {
     "INTERVENTION",
 }
 
-ALLOWED_MEDIA_EXTENSIONS = {
+IMAGE_EXTENSIONS = {
     "jpg",
     "jpeg",
     "png",
     "webp",
     "gif",
+}
+
+VIDEO_EXTENSIONS = {
     "mp4",
     "mov",
     "webm",
 }
 
+ALLOWED_MEDIA_EXTENSIONS = (
+    IMAGE_EXTENSIONS |
+    VIDEO_EXTENSIONS
+)
 
-def allowed_media(filename):
+
+def allowed_media(
+    filename
+):
     return (
         "." in filename
-        and filename.rsplit(".", 1)[1].lower()
+        and filename
+        .rsplit(".", 1)[1]
+        .lower()
         in ALLOWED_MEDIA_EXTENSIONS
     )
 
 
-def save_media_files(files):
+def compress_image(
+    file,
+    output_path,
+    extension,
+):
+    file.stream.seek(0)
+
+    image = Image.open(
+        file.stream
+    )
+
+    image = ImageOps.exif_transpose(
+        image
+    )
+
+    image.thumbnail(
+        (1920, 1920),
+        Image.Resampling.LANCZOS,
+    )
+
+    if extension in {
+        "jpg",
+        "jpeg",
+    }:
+        if image.mode not in {
+            "RGB",
+            "L",
+        }:
+            image = image.convert(
+                "RGB"
+            )
+
+        image.save(
+            output_path,
+            format="JPEG",
+            quality=82,
+            optimize=True,
+            progressive=True,
+        )
+
+    elif extension == "webp":
+        if image.mode not in {
+            "RGB",
+            "RGBA",
+        }:
+            image = image.convert(
+                "RGB"
+            )
+
+        image.save(
+            output_path,
+            format="WEBP",
+            quality=82,
+            method=6,
+        )
+
+    elif extension == "png":
+        image.save(
+            output_path,
+            format="PNG",
+            optimize=True,
+            compress_level=9,
+        )
+
+    elif extension == "gif":
+        image.save(
+            output_path,
+            format="GIF",
+            optimize=True,
+        )
+
+
+def save_media_files(
+    files
+):
     upload_folder = os.path.join(
         current_app.root_path,
         "uploads",
@@ -65,10 +153,15 @@ def save_media_files(files):
     saved_files = []
 
     for file in files:
-        if not file or not file.filename:
+        if (
+            not file
+            or not file.filename
+        ):
             continue
 
-        if not allowed_media(file.filename):
+        if not allowed_media(
+            file.filename
+        ):
             continue
 
         safe_name = secure_filename(
@@ -90,7 +183,25 @@ def save_media_files(files):
             unique_name,
         )
 
-        file.save(file_path)
+        try:
+            if extension in IMAGE_EXTENSIONS:
+                compress_image(
+                    file,
+                    file_path,
+                    extension,
+                )
+            else:
+                file.stream.seek(0)
+
+                file.save(
+                    file_path
+                )
+
+        except UnidentifiedImageError:
+            continue
+
+        except OSError:
+            continue
 
         saved_files.append(
             unique_name
@@ -129,10 +240,17 @@ def list_reports():
 @jwt_required()
 def create_report():
     if request.is_json:
-        data = request.get_json() or {}
+        data = (
+            request.get_json()
+            or {}
+        )
+
         media_files = []
+
     else:
-        data = request.form.to_dict()
+        data = (
+            request.form.to_dict()
+        )
 
         media_files = (
             request.files.getlist(
@@ -141,7 +259,8 @@ def create_report():
         )
 
     report_type = (
-        data.get("type") or ""
+        data.get("type")
+        or ""
     ).upper().replace(
         "-",
         "_",
@@ -154,14 +273,19 @@ def create_report():
         }), 400
 
     title = (
-        data.get("title") or ""
+        data.get("title")
+        or ""
     ).strip()
 
     description = (
-        data.get("description") or ""
+        data.get("description")
+        or ""
     ).strip()
 
-    if not title or not description:
+    if (
+        not title
+        or not description
+    ):
         return jsonify({
             "error":
                 "title and description are required"
@@ -203,26 +327,38 @@ def create_report():
                 "latitude and longitude must be valid numbers"
         }), 400
 
-    saved_media = (
-        save_media_files(
-            media_files
-        )
+    saved_media = save_media_files(
+        media_files
     )
 
     report = Report(
         user_id=int(
             get_jwt_identity()
         ),
+
         type=report_type,
+
         title=title,
-        description=description,
-        status="DRAFT",
-        location_name=data.get(
-            "location_name"
-        ),
-        latitude=latitude,
-        longitude=longitude,
-        media=saved_media,
+
+        description=
+            description,
+
+        status=
+            "DRAFT",
+
+        location_name=
+            data.get(
+                "location_name"
+            ),
+
+        latitude=
+            latitude,
+
+        longitude=
+            longitude,
+
+        media=
+            saved_media,
     )
 
     db.session.add(
@@ -240,7 +376,9 @@ def create_report():
     }), 201
 
 
-@reports_bp.get("/public")
+@reports_bp.get(
+    "/public"
+)
 def public_reports():
     reports = (
         Report.query
@@ -259,7 +397,9 @@ def public_reports():
     public_items = []
 
     for report in reports:
-        data = report.to_dict()
+        data = (
+            report.to_dict()
+        )
 
         data.pop(
             "user_id",
@@ -312,7 +452,9 @@ def public_report_detail(
                 "report is not publicly available"
         }), 404
 
-    data = report.to_dict()
+    data = (
+        report.to_dict()
+    )
 
     data.pop(
         "user_id",
@@ -351,6 +493,7 @@ def notifications():
         )
         .join(
             Report,
+
             StatusHistory.report_id
             == Report.id,
         )
@@ -368,7 +511,10 @@ def notifications():
 
     notification_items = []
 
-    for history, report in history_items:
+    for (
+        history,
+        report,
+    ) in history_items:
         notification_items.append({
             "id":
                 history.id,
@@ -416,6 +562,7 @@ def mark_all_notifications_read():
         )
         .join(
             Report,
+
             StatusHistory.report_id
             == Report.id,
         )
@@ -561,7 +708,9 @@ def get_report(
                 "you cannot view this report"
         }), 403
 
-    data = report.to_dict()
+    data = (
+        report.to_dict()
+    )
 
     data["status_history"] = [
         history.to_dict()
@@ -597,19 +746,28 @@ def update_report(
                 "report not found"
         }), 404
 
-    if report.user_id != user_id:
+    if (
+        report.user_id
+        != user_id
+    ):
         return jsonify({
             "error":
                 "you cannot edit this report"
         }), 403
 
-    if report.status != "DRAFT":
+    if (
+        report.status
+        != "DRAFT"
+    ):
         return jsonify({
             "error":
                 "only DRAFT reports can be edited"
         }), 403
 
-    data = request.get_json() or {}
+    data = (
+        request.get_json()
+        or {}
+    )
 
     editable_fields = [
         "title",
@@ -660,13 +818,19 @@ def delete_report(
                 "report not found"
         }), 404
 
-    if report.user_id != user_id:
+    if (
+        report.user_id
+        != user_id
+    ):
         return jsonify({
             "error":
                 "only the creator can delete this report"
         }), 403
 
-    if report.status != "DRAFT":
+    if (
+        report.status
+        != "DRAFT"
+    ):
         return jsonify({
             "error":
                 "only DRAFT reports can be deleted"
@@ -693,6 +857,7 @@ def delete_report(
                 os.remove(
                     file_path
                 )
+
             except OSError:
                 pass
 
