@@ -1,5 +1,11 @@
+import io
 import os
+import re
 import uuid
+
+from urllib.parse import urlparse
+
+import cloudinary.uploader
 
 from flask import (
     Blueprint,
@@ -16,7 +22,11 @@ from flask_jwt_extended import (
 
 from werkzeug.utils import secure_filename
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import (
+    Image,
+    ImageOps,
+    UnidentifiedImageError,
+)
 
 from app.extensions import db
 from app.models import Report, StatusHistory
@@ -27,10 +37,12 @@ reports_bp = Blueprint(
     __name__,
 )
 
+
 VALID_TYPES = {
     "RED_FLAG",
     "INTERVENTION",
 }
+
 
 IMAGE_EXTENSIONS = {
     "jpg",
@@ -40,21 +52,21 @@ IMAGE_EXTENSIONS = {
     "gif",
 }
 
+
 VIDEO_EXTENSIONS = {
     "mp4",
     "mov",
     "webm",
 }
 
+
 ALLOWED_MEDIA_EXTENSIONS = (
-    IMAGE_EXTENSIONS |
-    VIDEO_EXTENSIONS
+    IMAGE_EXTENSIONS
+    | VIDEO_EXTENSIONS
 )
 
 
-def allowed_media(
-    filename
-):
+def allowed_media(filename):
     return (
         "." in filename
         and filename
@@ -66,7 +78,6 @@ def allowed_media(
 
 def compress_image(
     file,
-    output_path,
     extension,
 ):
     file.stream.seek(0)
@@ -84,6 +95,8 @@ def compress_image(
         Image.Resampling.LANCZOS,
     )
 
+    output = io.BytesIO()
+
     if extension in {
         "jpg",
         "jpeg",
@@ -97,7 +110,7 @@ def compress_image(
             )
 
         image.save(
-            output_path,
+            output,
             format="JPEG",
             quality=82,
             optimize=True,
@@ -114,7 +127,7 @@ def compress_image(
             )
 
         image.save(
-            output_path,
+            output,
             format="WEBP",
             quality=82,
             method=6,
@@ -122,7 +135,7 @@ def compress_image(
 
     elif extension == "png":
         image.save(
-            output_path,
+            output,
             format="PNG",
             optimize=True,
             compress_level=9,
@@ -130,26 +143,17 @@ def compress_image(
 
     elif extension == "gif":
         image.save(
-            output_path,
+            output,
             format="GIF",
             optimize=True,
         )
 
+    output.seek(0)
 
-def save_media_files(
-    files
-):
-    upload_folder = os.path.join(
-        current_app.root_path,
-        "uploads",
-        "reports",
-    )
+    return output
 
-    os.makedirs(
-        upload_folder,
-        exist_ok=True,
-    )
 
+def save_media_files(files):
     saved_files = []
 
     for file in files:
@@ -174,40 +178,168 @@ def save_media_files(
             .lower()
         )
 
-        unique_name = (
-            f"{uuid.uuid4().hex}.{extension}"
-        )
-
-        file_path = os.path.join(
-            upload_folder,
-            unique_name,
+        public_id = (
+            "jiseti/reports/"
+            f"{uuid.uuid4().hex}"
         )
 
         try:
             if extension in IMAGE_EXTENSIONS:
-                compress_image(
+                compressed_file = compress_image(
                     file,
-                    file_path,
                     extension,
                 )
+
+                result = cloudinary.uploader.upload(
+                    compressed_file,
+                    public_id=public_id,
+                    resource_type="image",
+                )
+
             else:
                 file.stream.seek(0)
 
-                file.save(
-                    file_path
+                result = cloudinary.uploader.upload(
+                    file.stream,
+                    public_id=public_id,
+                    resource_type="video",
                 )
 
-        except UnidentifiedImageError:
-            continue
+            secure_url = result.get(
+                "secure_url"
+            )
 
-        except OSError:
-            continue
+            if secure_url:
+                saved_files.append(
+                    secure_url
+                )
 
-        saved_files.append(
-            unique_name
-        )
+        except (
+            UnidentifiedImageError,
+            OSError,
+        ) as error:
+            print(
+                "Media processing failed:",
+                error,
+            )
+
+        except Exception as error:
+            print(
+                "Cloudinary upload failed:",
+                error,
+            )
 
     return saved_files
+
+
+def is_cloudinary_url(value):
+    return (
+        isinstance(value, str)
+        and value.startswith(
+            "https://res.cloudinary.com/"
+        )
+    )
+
+
+def cloudinary_resource_type(url):
+    if "/video/upload/" in url:
+        return "video"
+
+    return "image"
+
+
+def cloudinary_public_id_from_url(url):
+    try:
+        parsed_url = urlparse(url)
+
+        if "/upload/" not in parsed_url.path:
+            return None
+
+        upload_path = parsed_url.path.split(
+            "/upload/",
+            1,
+        )[1]
+
+        path_parts = upload_path.split("/")
+
+        if (
+            path_parts
+            and re.fullmatch(
+                r"v\d+",
+                path_parts[0],
+            )
+        ):
+            path_parts = path_parts[1:]
+
+        public_id = "/".join(
+            path_parts
+        )
+
+        public_id = os.path.splitext(
+            public_id
+        )[0]
+
+        return public_id
+
+    except Exception:
+        return None
+
+
+def delete_cloudinary_media(url):
+    public_id = (
+        cloudinary_public_id_from_url(
+            url
+        )
+    )
+
+    if not public_id:
+        return
+
+    resource_type = (
+        cloudinary_resource_type(
+            url
+        )
+    )
+
+    try:
+        cloudinary.uploader.destroy(
+            public_id,
+            resource_type=resource_type,
+            invalidate=True,
+        )
+
+    except Exception as error:
+        print(
+            "Cloudinary delete failed:",
+            error,
+        )
+
+
+def delete_local_media(filename):
+    upload_folder = os.path.join(
+        current_app.root_path,
+        "uploads",
+        "reports",
+    )
+
+    file_path = os.path.join(
+        upload_folder,
+        filename,
+    )
+
+    if os.path.exists(
+        file_path
+    ):
+        try:
+            os.remove(
+                file_path
+            )
+
+        except OSError as error:
+            print(
+                "Local media delete failed:",
+                error,
+            )
 
 
 @reports_bp.get("")
@@ -340,25 +472,19 @@ def create_report():
 
         title=title,
 
-        description=
-            description,
+        description=description,
 
-        status=
-            "DRAFT",
+        status="DRAFT",
 
-        location_name=
-            data.get(
-                "location_name"
-            ),
+        location_name=data.get(
+            "location_name"
+        ),
 
-        latitude=
-            latitude,
+        latitude=latitude,
 
-        longitude=
-            longitude,
+        longitude=longitude,
 
-        media=
-            saved_media,
+        media=saved_media,
     )
 
     db.session.add(
@@ -397,9 +523,7 @@ def public_reports():
     public_items = []
 
     for report in reports:
-        data = (
-            report.to_dict()
-        )
+        data = report.to_dict()
 
         data.pop(
             "user_id",
@@ -452,9 +576,7 @@ def public_report_detail(
                 "report is not publicly available"
         }), 404
 
-    data = (
-        report.to_dict()
-    )
+    data = report.to_dict()
 
     data.pop(
         "user_id",
@@ -493,7 +615,6 @@ def notifications():
         )
         .join(
             Report,
-
             StatusHistory.report_id
             == Report.id,
         )
@@ -562,7 +683,6 @@ def mark_all_notifications_read():
         )
         .join(
             Report,
-
             StatusHistory.report_id
             == Report.id,
         )
@@ -708,9 +828,7 @@ def get_report(
                 "you cannot view this report"
         }), 403
 
-    data = (
-        report.to_dict()
-    )
+    data = report.to_dict()
 
     data["status_history"] = [
         history.to_dict()
@@ -746,19 +864,13 @@ def update_report(
                 "report not found"
         }), 404
 
-    if (
-        report.user_id
-        != user_id
-    ):
+    if report.user_id != user_id:
         return jsonify({
             "error":
                 "you cannot edit this report"
         }), 403
 
-    if (
-        report.status
-        != "DRAFT"
-    ):
+    if report.status != "DRAFT":
         return jsonify({
             "error":
                 "only DRAFT reports can be edited"
@@ -818,48 +930,32 @@ def delete_report(
                 "report not found"
         }), 404
 
-    if (
-        report.user_id
-        != user_id
-    ):
+    if report.user_id != user_id:
         return jsonify({
             "error":
                 "only the creator can delete this report"
         }), 403
 
-    if (
-        report.status
-        != "DRAFT"
-    ):
+    if report.status != "DRAFT":
         return jsonify({
             "error":
                 "only DRAFT reports can be deleted"
         }), 403
 
-    upload_folder = os.path.join(
-        current_app.root_path,
-        "uploads",
-        "reports",
-    )
-
-    for filename in (
+    for media_item in (
         report.media or []
     ):
-        file_path = os.path.join(
-            upload_folder,
-            filename,
-        )
-
-        if os.path.exists(
-            file_path
+        if is_cloudinary_url(
+            media_item
         ):
-            try:
-                os.remove(
-                    file_path
-                )
+            delete_cloudinary_media(
+                media_item
+            )
 
-            except OSError:
-                pass
+        else:
+            delete_local_media(
+                media_item
+            )
 
     db.session.delete(
         report
